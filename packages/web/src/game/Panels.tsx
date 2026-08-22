@@ -14,6 +14,7 @@ import type { Action, Card, IndustryType, MerchantId, PlayerIndex } from '@brass
 import type { FilteredState, RoomState } from '@brass/protocol';
 import { INDUSTRY_STYLE, PLAYER_COLORS, PLAYER_COLOR_KEYS } from '../board/BoardSvg';
 import { cardFaceKey, cardFromId, cardName, describeAction, industryName, locationName, merchantName } from './display';
+import { actionCardsText, buildRounds, incomeSuffix } from './eraLog';
 import { INDUSTRY_ORDER } from './interactions';
 import { DiscardModal } from './DiscardModal';
 import { PlayerMat } from './PlayerMat';
@@ -392,49 +393,7 @@ export function PlayerBoard({
     const rank = state.turnOrder.indexOf(seat) + 1;
     // 本时代行动按回合分组(最新轮在前);本回合行动取当前轮组——
     // 刷新后 log 只剩残尾,但 eraActions 是服务端全量簿记,记录不丢
-    const rounds: { round: number; actions: { action: Action; moneyDelta: number; note?: 'round-income' }[] }[] = [];
-    {
-      const ea = eraActions ?? [];
-      const apr = (r: number): number => (state.era === 'canal' && r === 1 ? 1 : 2);
-      // 与 DiscardModal.buildRounds 同一 walk 方案:note 条目附进当前轮,不占名额
-      let current: { round: number; actions: { action: Action; moneyDelta: number; note?: 'round-income' }[] } | null = null;
-      let used = 0;
-      for (const a of ea) {
-        if (a.note === 'round-income') {
-          current?.actions.push(a);
-          continue;
-        }
-        if (current === null || used >= apr(current.round)) {
-          current = { round: rounds.length + 1, actions: [] };
-          rounds.push(current);
-          used = 0;
-        }
-        current.actions.push(a);
-        used += 1;
-      }
-      rounds.reverse();
-    }
-    // 轮末收入合计 → 轮标签后缀(着色与行动盈亏一致):"（收入 +£30）/（收入 −£3）/（收入 +£0）"
-    const incomeSuffixOf = (entries: { moneyDelta: number; note?: 'round-income' }[]): ReactNode => {
-      let sum = 0;
-      let has = false;
-      for (const e of entries) {
-        if (e.note === 'round-income') {
-          sum += e.moneyDelta;
-          has = true;
-        }
-      }
-      if (!has) return null;
-      return (
-        <>
-          （收入{' '}
-          <em className={`compact-round-delta ${sum >= 0 ? 'pos' : 'neg'}`}>
-            {sum >= 0 ? `+£${sum}` : `−£${-sum}`}
-          </em>
-          ）
-        </>
-      );
-    };
+    const rounds = buildRounds(state, eraActions ?? [], true);
     // roundEndPending(轮末结算挂起,等 held 玩家确认回合)时轮次已指向"下一轮",
     // 而刚结束那轮才是要展示的——此时取最新一轮;否则按时代内当前轮号 roundNow
     // 匹配(缺省回退 state.round)。轮末停顿(turnHold 非空且新一轮还无人行动)同样回落
@@ -444,10 +403,6 @@ export function PlayerBoard({
         : (rounds.find((r) => r.round === (roundNow ?? state.round))?.actions ??
           (turnHold !== null && turnHold !== undefined ? (rounds[0]?.actions ?? []) : []))
     ).filter((a) => a.note !== 'round-income');
-    const actionCardsText = (a: Action): string =>
-      a.type === 'scout'
-        ? a.cardIds.map((id) => cardName(cardFromId(id))).join('+')
-        : cardName(cardFromId(a.cardId));
     return (
       <section
         className={`player-board compact${pulse ? ' pulse' : ''}${activeTurn ? ' active-turn' : ''}`}
@@ -509,7 +464,7 @@ export function PlayerBoard({
               rounds.map((r) => (
                 <div key={r.round} className="compact-history-round">
                   <span className="compact-history-label">
-                    第 {r.round} 轮{incomeSuffixOf(r.actions)}
+                    第 {r.round} 轮{incomeSuffix(r.round, r.actions)}
                   </span>
                   {r.actions
                     .filter((a) => a.note !== 'round-income')
