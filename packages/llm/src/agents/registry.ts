@@ -29,8 +29,8 @@ const BUILTIN_PLUGINS: Record<string, AgentPlugin> = {
   'jsb-v20260903': jsbV20260903,
 };
 
-/** 大厅缺省 AI：jsb-v20260902b（0902 迭代：局面估值叶 + yo-yo 四连动前瞻，vs 0901 74%，2026-09-02 切默认）。 */
-export const DEFAULT_SPEC = 'builtin:jsb-v20260902b';
+/** 大厅缺省 AI：jsb-v20260903（0902b 迭代：真实概率叶，vs 0902b 56.2%（×500）、内战 114.3，2026-09-03 切默认）。 */
+export const DEFAULT_SPEC = 'builtin:jsb-v20260903';
 
 /** 已登记的内置插件清单（大厅可选列表/跑分用）。 */
 export function listAgentPlugins(): AgentPlugin['meta'][] {

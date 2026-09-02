@@ -21,7 +21,7 @@ describe('WS AI 席位版本选择', () => {
     const names = (res.plugins as { name: string }[]).map((p) => p.name);
     expect(names).toContain('jsb-v20260902b');
     expect(names).toContain('lm-heuristic-v20260829');
-    expect(res.defaultSpec).toBe('builtin:jsb-v20260902b');
+    expect(res.defaultSpec).toBe('builtin:jsb-v20260903');
   });
 
   it('create_room 带 specs → AI 席位昵称带插件短名，对局推进', async () => {
@@ -38,7 +38,7 @@ describe('WS AI 席位版本选择', () => {
           aiSeats: {
             count: 2,
             difficulty: 'normal',
-            specs: ['builtin:jsb-v20260902b', 'builtin:lm-heuristic-v20260826'],
+            specs: ['builtin:jsb-v20260903', 'builtin:lm-heuristic-v20260826'],
           },
         },
       },
@@ -46,11 +46,11 @@ describe('WS AI 席位版本选择', () => {
     );
     const roomCreated = (await a.nextMessage('room_state')).room;
     const code = roomCreated.code as string;
-    expect(roomCreated.config.aiSeats.specs).toEqual(['builtin:jsb-v20260902b', 'builtin:lm-heuristic-v20260826']);
+    expect(roomCreated.config.aiSeats.specs).toEqual(['builtin:jsb-v20260903', 'builtin:lm-heuristic-v20260826']);
     await a.send({ type: 'start_game', protocolVersion: PV, token: credA.token });
     const roomStarted = (await a.nextMessage('room_state', (m) => m.room.started === true)).room;
     const nicknames = roomStarted.seats.map((s: { nickname: string } | null) => s?.nickname);
-    expect(nicknames).toEqual(['A', 'AI-1（jsb-v20260902b）', 'AI-2（lm-heuristic-v20260826）']);
+    expect(nicknames).toEqual(['A', 'AI-1（jsb-v20260903）', 'AI-2（lm-heuristic-v20260826）']);
     // 对局能推进：等首个快照（AI 席位决策驱动）
     const snap = await a.nextMessage('snapshot');
     expect(snap.state).toBeDefined();
@@ -66,7 +66,7 @@ describe('WS AI 席位版本选择', () => {
         nickname: 'A',
         config: {
           playerCount: 3,
-          aiSeats: { count: 2, difficulty: 'normal', specs: ['builtin:jsb-v20260902b'] },
+          aiSeats: { count: 2, difficulty: 'normal', specs: ['builtin:jsb-v20260903'] },
         },
       },
       'error',
