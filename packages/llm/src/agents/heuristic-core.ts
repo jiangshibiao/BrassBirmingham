@@ -205,6 +205,10 @@ const BASE_CFG = {
     /** 棉花流冲刺奖（2026-09-03 用户 hint，0=关闭）：铁路时代建 L3+ 棉且
      * 自有酒桶时的方向性加值（铁路再冲 3-4 张 L3/L4 棉，配自酒卖）。 */
     cottonRushBonus: 0,
+    /** 运河后期 L1 建造惩罚（0=关闭，默认待消融）：运河进度 <35% 时建 L1
+     * 板块的风险扣分——L1 未翻在运河末被移除=纯亏（审计：全场每局 ~0.6 块
+     * L1 建了没翻，含棉 L1/煤 L1/制造 L1）。 */
+    canalLateL1Penalty: 0,
   },
   network: {
     accessPerLocationCard: 0.6,
@@ -1554,6 +1558,10 @@ function scoreBuildOp(state: GameState, ctx: EvalCtx, ind: IndustryType, loc: Lo
   // 覆盖己方板块 = 放弃其时代末 VP。
   const over = overbuiltOwnTile(state, ctx.pid, ind, loc, slotIndex, tile);
   if (over) p.risk -= over.tile.vp * CFG.value.ownOverbuildVpLoss;
+  // 运河后期 L1 建造惩罚：运河进度 <35% 时建 L1 板块，未翻在运河末被移除=纯亏。
+  if (CFG.build.canalLateL1Penalty > 0 && tile.level === 1 && state.era === 'canal' && ctx.eraFrac < 0.35) {
+    p.risk -= CFG.build.canalLateL1Penalty;
+  }
 
   // 改建对手煤/铁厂（引擎规则:全场该类方块为 0 时同产业更高级可覆盖）——
   // 定向拆除定价:翻面板=对手已得的时代末 VP 与收入流直接蒸发,未翻面板
@@ -1771,16 +1779,13 @@ function developTargetValue(
   return v - developGuardrailPenalty(ind, removed.level);
 }
 
-/** 研发方向引导的可行性门：仅当该产业对这名玩家真实可售时才引导——
- * 商人收 + 啤酒路径（自酒/商人酒）+ 手牌支持，三者同时满足
- * （E4r/E7 教训：单条件门全场无脑冲棉，真实棉花玩家每局只有 1-2 个）。 */
+/** 研发方向引导的可行性门：仅当玩家已用一块 L1 棉花/陶瓷板块"投石问路"
+ * （场上已有该产业板块，翻过或没翻过）且该产业仍可售时才引导——
+ * 用户流派范式是"先建 L1 确认能卖，再研发整个栈"，避免过早投入
+ * （E4r 教训：C1-C3 可行性未明就灌研发，沉没成本拖垮全盘）。 */
 function developDirectionViable(state: GameState, ctx: EvalCtx, ind: IndustryType): boolean {
-  if (!MERCHANT_IDS.some((id) => merchantAccepts(state, id, ind))) return false;
-  const beer =
-    ownedBeerBarrels(state, ctx.pid) > 0 ||
-    MERCHANT_IDS.some((id) => merchantAccepts(state, id, ind) && merchantHasBeerFor(state, id, ind));
-  if (!beer) return false;
-  return handSupport(state, ctx.pid, ind) >= 1;
+  if (countOwnTilesOnBoard(state, ctx.pid, ind) === 0) return false;
+  return MERCHANT_IDS.some((id) => merchantAccepts(state, id, ind));
 }
 
 /** score_develop_plans：对一个合法 develop 行动（removals 1|2）评分。 */
