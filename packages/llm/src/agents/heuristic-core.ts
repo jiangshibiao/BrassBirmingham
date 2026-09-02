@@ -134,6 +134,11 @@ const BASE_CFG = {
      * 扣掉本建造动）已少于己方未翻可售板块数（含本块）时，新可售板块必砸
      * 手里 → flipProb 压到 floor。防末动建可售板块无卖动可跟的纯废动。 */
     sellActionWindow: 1,
+    /** 2 桶板块的自有酒折扣（1=不变，默认待消融）：beerToFlip=2 的板块
+     * （制造 L5/陶 L3/L5）在自有酒桶 <2 时 flipProb 乘本值——建造时点的
+     * 连通酒估计（含商人酒/对手酒）到卖出时点常已被喝走，只有自有酒桶
+     * 是可靠弹药（0903 审计：制造 L5 仍 0.76/局未翻的头号漏项）。 */
+    ownBeer2Discount: 1.0,
     // ── 以下为插件新增（上游无）。C6 消融链 ×500 终验（2026-08-31，62.6% vs
     // 母体 36.2%）证明：收官窗/库存衰减复杂机制全是净负贡献，默认全部关闭；
     // 有效的只有 sell/network 里三个加量常数项。代码保留供后续调参。 ──
@@ -259,6 +264,11 @@ const BASE_CFG = {
      * 按其 VP 面值 × 本系数追加——棉花流冲 L3/陶瓷冲 L3/制造冲 L5 的精确引导，
      * 只对真实解锁出的高价值板块生效（避免无差别灌水）。 */
     unlockSellableVpScale: 0,
+    /** 解锁板块真实建造分系数（0=关闭，默认待消融）：研发目标加值 =
+     * 解锁出的板块的 scoreBuildOp（含 flipProb/商人/啤酒校验）× 本系数——
+     * 研发只在"解锁出的板块确实值得建"时升值（棉花冲 L3 的精确版：
+     * 不是无脑灌研发，而是解锁 L3 且 L3 真能建能卖时才推）。 */
+    unlockBuildValueScale: 0,
   },
   sell: {
     developBonusValue: 0.5,
@@ -1223,6 +1233,11 @@ function sellableFlip(
     // beerToFlip（制造 L5/陶 L3/L5 需 2 桶，beer_economy 里才用真实桶数）。
     const need = w.realBeerNeed > 0 ? (nextTile(state, ctx.pid, ind)?.beerToFlip ?? 1) : 1;
     b += beerAvailable(state, loc, ctx.pid, need) ? w.sellableMerchantWithBeer : w.sellableMerchantOnly;
+    // 2 桶板块的自有酒折扣：自有酒桶 <2 时 flipProb 打折——连通酒估计
+    // 到卖出时点常已被喝走，只有自有酒桶是可靠弹药。
+    if (need >= 2 && w.ownBeer2Discount < 1 && ownedBeerBarrels(state, ctx.pid) < 2) {
+      b *= w.ownBeer2Discount;
+    }
   } else {
     b += w.sellableNoMerchant;
   }
@@ -1772,6 +1787,15 @@ function developTargetValue(
     // （棉花流冲 L3/陶瓷冲 L3/制造冲 L5 的精确引导，只对真实高价值解锁生效）。
     if (unlocked && unlocked.sellable && unlocked.level >= 3) {
       v += unlocked.vp * w.unlockSellableVpScale;
+    }
+  }
+  // 解锁板块真实建造分：解锁出的板块确实值得建（scoreBuildOp 含 flipProb/
+  // 商人/啤酒校验）时，研发才升值——棉花冲 L3 的精确版。
+  if (w.unlockBuildValueScale > 0 && unlocked) {
+    const loc = ctx.targets.find((t) => t.industry === unlocked.industry)?.location;
+    if (loc !== undefined) {
+      const buildScore = scoreBuildOp(state, ctx, unlocked.industry, loc);
+      if (buildScore > 0) v += buildScore * w.unlockBuildValueScale;
     }
   }
   if (ctx.plan.industry === ind) v += w.planBonus;
