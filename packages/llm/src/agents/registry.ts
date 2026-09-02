@@ -17,6 +17,7 @@ import jsbV20260831 from './jsb-v20260831.js';
 import jsbV20260901 from './jsb-v20260901.js';
 import jsbV20260902a from './jsb-v20260902a.js';
 import jsbV20260902b from './jsb-v20260902b.js';
+import jsbV20260903 from './jsb-v20260903.js';
 
 const BUILTIN_PLUGINS: Record<string, AgentPlugin> = {
   'lm-heuristic-v20260826': lmV20260826,
@@ -25,6 +26,7 @@ const BUILTIN_PLUGINS: Record<string, AgentPlugin> = {
   'jsb-v20260901': jsbV20260901,
   'jsb-v20260902a': jsbV20260902a,
   'jsb-v20260902b': jsbV20260902b,
+  'jsb-v20260903': jsbV20260903,
 };
 
 /** 大厅缺省 AI：jsb-v20260902b（0902 迭代：局面估值叶 + yo-yo 四连动前瞻，vs 0901 74%，2026-09-02 切默认）。 */

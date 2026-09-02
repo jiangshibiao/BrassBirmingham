@@ -202,6 +202,9 @@ const BASE_CFG = {
     /** 改建目标是当前 VP 领先者时的追加狙击奖。 */
     opponentOverbuildLeaderBonus: 0,
     railLateBeerBonus: 1.2,
+    /** 棉花流冲刺奖（2026-09-03 用户 hint，0=关闭）：铁路时代建 L3+ 棉且
+     * 自有酒桶时的方向性加值（铁路再冲 3-4 张 L3/L4 棉，配自酒卖）。 */
+    cottonRushBonus: 0,
   },
   network: {
     accessPerLocationCard: 0.6,
@@ -240,6 +243,18 @@ const BASE_CFG = {
     canalCountLimit: 4.0,
     railCountLimit: 1.0,
     overLimitSteepness: 2.0,
+    /** 研发方向引导（2026-09-03 用户复盘 hint，0=关闭）：各产业各级研发的方向性
+     * 加值（仅运河时代）——棉花流研发 L1×2+L2×2 冲 L3；酒厂 L1 必研发；
+     * 陶瓷 L2 冲 L3；制造 L3/L4 适合研发（L5 反而配合 Link 吃分）。 */
+    dirCottonL1: 0,
+    dirCottonL2: 0,
+    dirBreweryL1: 0,
+    dirPotteryL2: 0,
+    dirManuL34: 0,
+    /** 解锁板块实际价值系数（0=关闭）：研发解锁出 L3+ 可售板块且该产业可售时，
+     * 按其 VP 面值 × 本系数追加——棉花流冲 L3/陶瓷冲 L3/制造冲 L5 的精确引导，
+     * 只对真实解锁出的高价值板块生效（避免无差别灌水）。 */
+    unlockSellableVpScale: 0,
   },
   sell: {
     developBonusValue: 0.5,
@@ -342,6 +357,17 @@ const BASE_CFG = {
     /** 对手回应（MaxN）扣减权重（0=关闭，默认待消融）：我方回合结束后，
      * 下一位对手贪心最佳行动的分数从己方价值中扣减（4 人非零和各自最大化）。 */
     opponentResponseWeight: 0,
+    /** 推演复核局数（0=关闭，默认待消融）：对价值前 rolloutTopK 名候选各跑
+     * K 局随机推演到终局，均分显著更优者改选（最后一块结构拼图：
+     * 用模拟代替静态估值裁决顶部候选）。 */
+    rolloutK: 0,
+    /** 推演复核的候选数（取价值前 N 名）。 */
+    rolloutTopK: 2,
+    /** 改选所需的最小均分优势（防噪声误判）。 */
+    rolloutMargin: 3.0,
+    /** 仅当两个候选的价值差小于该阈值时，才触发推演（将模拟次数只用于候选价值接近的情况，
+     * 它们才是真正的难决策；差距明显的交给启发式）。 */
+    rolloutDeltaThreshold: 2.0,
     /** 仅对前 K 个首动候选评估对手回应（成本 ≈ 每候选一次全量打分）。 */
     opponentResponseK: 2,
     /** 四连动（yo-yo）前瞻权重（0=关闭，默认待消融）：本轮我是最后行动者
@@ -1561,6 +1587,16 @@ function scoreBuildOp(state: GameState, ctx: EvalCtx, ind: IndustryType, loc: Lo
     const beerOk = countBeerSources(state, loc, ctx.pid) > 0 || beerBarrelReachable(state, loc);
     if (beerOk) p.strategic += CFG.build.railLateBeerBonus;
   }
+  // 棉花流冲刺：铁路时代建 L3+ 棉且自有酒桶（铁路再冲 3-4 张 L3/L4 配自酒卖）。
+  if (
+    CFG.build.cottonRushBonus > 0 &&
+    ind === 'cotton' &&
+    tile.level >= 3 &&
+    !isCanalPhase(ctx.phase) &&
+    ownedBeerBarrels(state, ctx.pid) > 0
+  ) {
+    p.strategic += CFG.build.cottonRushBonus;
+  }
 
   return totalOf(ctx, p);
 }
@@ -1716,9 +1752,35 @@ function developTargetValue(
     }
   }
   if (isCanalPhase(ctx.phase)) v += w.canalBonus;
+  // 研发方向引导（用户 hint）：棉花流 L1/L2、酒厂 L1、陶瓷 L2、制造 L3/L4。
+  // 仅在产业可售（商人收 + 有啤酒路径）时引导——避免在该产业已死的局里误推。
+  if (isCanalPhase(ctx.phase) && developDirectionViable(state, ctx, ind)) {
+    if (ind === 'cotton' && removed.level === 1) v += w.dirCottonL1;
+    else if (ind === 'cotton' && removed.level === 2) v += w.dirCottonL2;
+    else if (ind === 'brewery' && removed.level === 1) v += w.dirBreweryL1;
+    else if (ind === 'pottery' && removed.level === 2) v += w.dirPotteryL2;
+    else if (ind === 'manufacturer' && (removed.level === 3 || removed.level === 4)) v += w.dirManuL34;
+    // 解锁板块实际价值：解锁出 L3+ 可售板块且产业可售时按 VP 面值追加
+    // （棉花流冲 L3/陶瓷冲 L3/制造冲 L5 的精确引导，只对真实高价值解锁生效）。
+    if (unlocked && unlocked.sellable && unlocked.level >= 3) {
+      v += unlocked.vp * w.unlockSellableVpScale;
+    }
+  }
   if (ctx.plan.industry === ind) v += w.planBonus;
   if (hasBuildableCard(state, ctx.pid, ind)) v += w.buildableCardBonus;
   return v - developGuardrailPenalty(ind, removed.level);
+}
+
+/** 研发方向引导的可行性门：仅当该产业对这名玩家真实可售时才引导——
+ * 商人收 + 啤酒路径（自酒/商人酒）+ 手牌支持，三者同时满足
+ * （E4r/E7 教训：单条件门全场无脑冲棉，真实棉花玩家每局只有 1-2 个）。 */
+function developDirectionViable(state: GameState, ctx: EvalCtx, ind: IndustryType): boolean {
+  if (!MERCHANT_IDS.some((id) => merchantAccepts(state, id, ind))) return false;
+  const beer =
+    ownedBeerBarrels(state, ctx.pid) > 0 ||
+    MERCHANT_IDS.some((id) => merchantAccepts(state, id, ind) && merchantHasBeerFor(state, id, ind));
+  if (!beer) return false;
+  return handSupport(state, ctx.pid, ind) >= 1;
 }
 
 /** score_develop_plans：对一个合法 develop 行动（removals 1|2）评分。 */
@@ -2168,6 +2230,22 @@ function evaluatePosition(state: GameState, pid: PlayerIndex): number {
   );
 }
 
+/** 随机推演到终局（LCG 种子保证确定性），返回 pid 座位的终局 VP。 */
+function randomRollout(state: GameState, pid: PlayerIndex, rngSeed: number): number {
+  let s = state;
+  let seed = rngSeed >>> 0;
+  const rand = (): number => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 0x100000000);
+  let steps = 0;
+  while (s.phase !== 'game-over') {
+    const player = s.turnOrder[s.currentPlayerIdx]!;
+    const legal = enumerateActions(s, player);
+    if (legal.length === 0) break;
+    s = applyAction(s, legal[Math.floor(rand() * legal.length)]!);
+    if (++steps > 100_000) break;
+  }
+  return s.players[pid]!.vp;
+}
+
 /** choose_action：首动候选 × 次动最优的确定性前瞻，返回 legal 中的最佳行动。 */
 function chooseAction(state: GameState, pid: PlayerIndex, legal: Action[], develops: DevelopCounts): Action {
   const ctx = getCtx(state, pid);
@@ -2176,6 +2254,7 @@ function chooseAction(state: GameState, pid: PlayerIndex, legal: Action[], devel
   const firstCandidates = topPerType(scored, CFG.lookahead.firstActionK);
 
   let best: { action: Action; value: number } | null = null;
+  const ranked: { action: Action; value: number }[] = [];
   for (const c1 of firstCandidates) {
     let s1: GameState;
     try {
@@ -2275,6 +2354,52 @@ function chooseAction(state: GameState, pid: PlayerIndex, legal: Action[], devel
       }
     }
     if (!best || value > best.value) best = { action: c1.action, value };
+    ranked.push({ action: c1.action, value });
+  }
+
+  // 推演复核（rolloutK>0）：对价值前 rolloutTopK 名各跑 K 局随机推演到终局，
+  // 若次名均分显著超过榜首（>rolloutMargin），改选次名。
+  // 仅在两个候选的价值接近（< rolloutDeltaThreshold）时触发，将模拟次数留给真正的难决策。
+  if (
+    CFG.lookahead.rolloutK > 0 &&
+    ranked.length >= 2 &&
+    ranked[0]!.value - ranked[1]!.value < CFG.lookahead.rolloutDeltaThreshold
+  ) {
+    ranked.sort((a, b) => b.value - a.value);
+    const top = ranked.slice(0, Math.max(2, CFG.lookahead.rolloutTopK));
+    let bestRoll = -1;
+    let bestIdx = 0;
+    for (let i = 0; i < top.length; i++) {
+      let sum = 0;
+      for (let k = 0; k < CFG.lookahead.rolloutK; k++) {
+        try {
+          const s1 = applyAction(state, top[i]!.action);
+          sum += randomRollout(s1, pid, 0x9e3779b9 ^ (i * 0x10001 + k));
+        } catch {
+          sum += 0;
+        }
+      }
+      const mean = sum / CFG.lookahead.rolloutK;
+      if (mean > bestRoll) {
+        bestRoll = mean;
+        bestIdx = i;
+      }
+    }
+    if (bestIdx > 0 && bestRoll > 0) {
+      const topMean = (() => {
+        let sum = 0;
+        for (let k = 0; k < CFG.lookahead.rolloutK; k++) {
+          try {
+            const s1 = applyAction(state, top[0]!.action);
+            sum += randomRollout(s1, pid, 0x9e3779b9 ^ k);
+          } catch {
+            sum += 0;
+          }
+        }
+        return sum / CFG.lookahead.rolloutK;
+      })();
+      if (bestRoll > topMean + CFG.lookahead.rolloutMargin) best = { action: top[bestIdx]!.action, value: bestRoll };
+    }
   }
 
   // 兜底（上游 pass_decision 语义：无候选时也有 pass=0 在 scored 里）。
