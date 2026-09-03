@@ -243,6 +243,14 @@ const BASE_CFG = {
      * 伯明翰/科尔布鲁克代尔/斯托克的权重与附近贸易商能卖的种类挂钩——
      * 卖的种类越多，这附近未来的建筑越多，权重相应提升（hint 4 补充）。 */
     canalEndL2NearMerchantPerDiversity: 0,
+    /** 酒厂售卖支持奖（0=关闭，默认待消融）：铁路时代若场上有未翻可售板块
+     * 且自有酒桶不足，建酒厂的额外奖励——"造酒厂桶给卖货供弹"的组合
+     * （hint 3 后半：每次造出酒桶会给 2 个桶，造两个建筑再一起造酒桶+卖出）。 */
+    railBrewerySellSupportBonus: 0,
+    /** 同城已有己方 Link 数 × 本值（0=关闭，默认待消融）：在一个城市连了好
+     * 几条路后，在此城造建筑的额外连通度分（hint 2 后半：更应倾向于在
+     * 高连通城市建造——连通度分吃得多）。 */
+    cityLinkBonus: 0,
   },
   network: {
     accessPerLocationCard: 0.6,
@@ -1052,6 +1060,17 @@ function ownsLinkTouching(state: GameState, pid: PlayerIndex, loc: LocationId): 
   });
 }
 
+/** 玩家触及 loc（a/b 端点）的己方 Link 数。 */
+function ownLinksToCity(state: GameState, pid: PlayerIndex, loc: LocationId): number {
+  let n = 0;
+  for (const bl of state.board.links) {
+    if (bl.player !== pid) continue;
+    const l = LINKS[bl.linkIndex]!;
+    if (l.a === loc || l.b === loc) n += 1;
+  }
+  return n;
+}
+
 /** 手里有能建 ind 的产业卡 / wild 产业卡。 */
 function hasBuildableCard(state: GameState, pid: PlayerIndex, ind: IndustryType): boolean {
   return state.players[pid]!.hand.some(
@@ -1646,14 +1665,21 @@ function scoreBuildOp(state: GameState, ctx: EvalCtx, ind: IndustryType, loc: Lo
   if (CFG.build.canalLateL1Penalty > 0 && tile.level === 1 && state.era === 'canal' && ctx.eraFrac < 0.35) {
     p.risk -= CFG.build.canalLateL1Penalty;
   }
-  // 铁路中后期造煤惩罚：同期连接普遍 4-8 VP 而煤仅 2-4 VP，无脑造煤是负优化。
+  // 酒厂售卖支持奖：铁路时代若场上有未翻可售板块且自有酒桶不足，建酒厂
+  // 额外奖励——"造酒厂桶给卖货供弹"的组合（铁路造酒厂给 2 个桶）。
   if (
-    CFG.build.railCoalLatePenalty > 0 &&
-    ind === 'coal' &&
+    CFG.build.railBrewerySellSupportBonus > 0 &&
+    ind === 'brewery' &&
     state.era === 'rail' &&
-    ctx.eraFrac < CFG.build.railCoalLateGate
+    ownUnflippedSellableCount(state, ctx.pid) > 0 &&
+    ownedBeerBarrels(state, ctx.pid) < 2
   ) {
-    p.risk -= CFG.build.railCoalLatePenalty;
+    p.strategic += CFG.build.railBrewerySellSupportBonus;
+  }
+  // 同城已有己方 Link 数 × 奖励：在一个城市连了好几条路后，在此城造建筑
+  // 的额外连通度分（更应倾向于在高连通城市建造）。
+  if (CFG.build.cityLinkBonus > 0) {
+    p.strategic += ownLinksToCity(state, ctx.pid, loc) * CFG.build.cityLinkBonus;
   }
   // 运河末首桶留存奖：运河收官时若还没有自己的未翻酒厂，建酒厂额外奖励
   // （铁路开局双轨的啤酒弹药，运河末留 1 桶比多翻一个低级酒厂值钱）。
@@ -1675,6 +1701,15 @@ function scoreBuildOp(state: GameState, ctx: EvalCtx, ind: IndustryType, loc: Lo
     } else if (CFG.build.canalEndL2NearMerchantPerDiversity > 0) {
       p.strategic += merchantDiversityFor(state, loc) * CFG.build.canalEndL2NearMerchantPerDiversity;
     }
+  }
+  // 铁路中后期造煤惩罚：同期连接普遍 4-8 VP 而煤仅 2-4 VP，无脑造煤是负优化。
+  if (
+    CFG.build.railCoalLatePenalty > 0 &&
+    ind === 'coal' &&
+    state.era === 'rail' &&
+    ctx.eraFrac < CFG.build.railCoalLateGate
+  ) {
+    p.risk -= CFG.build.railCoalLatePenalty;
   }
   // 可售板块自有酒门槛（hint 3）：铁路时代建可售板块，若自有酒桶不足以翻面
   // 且手上没有酒厂牌可造桶，视为大概率砸手里——贸易商桶只有 1 个、
