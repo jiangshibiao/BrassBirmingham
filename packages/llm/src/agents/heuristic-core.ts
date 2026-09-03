@@ -139,6 +139,14 @@ const BASE_CFG = {
      * 连通酒估计（含商人酒/对手酒）到卖出时点常已被喝走，只有自有酒桶
      * 是可靠弹药（0903 审计：制造 L5 仍 0.76/局未翻的头号漏项）。 */
     ownBeer2Discount: 1.0,
+    /** 可售板块自有酒门槛惩罚（0=关闭，默认待消融）：铁路时代建可售板块，
+     * 若自有酒桶 < beerToFlip 且手上没有酒厂牌可造桶，视为大概率砸手里
+     * （真人回放：AI 建 L5 制造厂仅 1 自有桶,翻面需 2,终局未翻=£16 纯亏）。 */
+    railSellableNoOwnBeerPenalty: 0,
+    /** 孤岛煤无法翻面时的惩罚系数（1=不变，默认待消融）：非连通商人位的
+     * 孤岛煤且市场吃不下全部方块时 flipProb 乘本值——利克煤终局未翻的教训
+     * （hint 1：小连通块里煤无法翻面，给一个很大的惩罚）。 */
+    isolatedCoalUnflippableMult: 1.0,
     // ── 以下为插件新增（上游无）。C6 消融链 ×500 终验（2026-08-31，62.6% vs
     // 母体 36.2%）证明：收官窗/库存衰减复杂机制全是净负贡献，默认全部关闭；
     // 有效的只有 sell/network 里三个加量常数项。代码保留供后续调参。 ──
@@ -214,6 +222,27 @@ const BASE_CFG = {
      * 板块的风险扣分——L1 未翻在运河末被移除=纯亏（审计：全场每局 ~0.6 块
      * L1 建了没翻，含棉 L1/煤 L1/制造 L1）。 */
     canalLateL1Penalty: 0,
+    /** 铁路中后期造煤惩罚（0=关闭，默认待消融）：铁路进度 <本门限时，
+     * 煤矿建造的风险扣分——真人回放显示 AI 铁路时代场均 4-5 座煤（真人 ~1），
+     * 同期连接普遍 4-8 VP 而煤仅 2-4 VP，无脑造煤是明确的负优化。 */
+    railCoalLatePenalty: 0,
+    /** 造煤惩罚的铁路进度门限（eraFrac 低于此值 = 中后期）。 */
+    railCoalLateGate: 0.5,
+    /** 运河末首桶留存奖（0=关闭，默认待消融）：运河收官时若场上还没有自己的
+     * 未翻酒厂，建酒厂的额外奖励——铁路开局双轨（£15+2煤+1啤酒）的弹药，
+     * 运河末留 1 桶比多翻一个低级酒厂值钱（hint 4 前半）。 */
+    canalEndBeerReserveBonus: 0,
+    /** 近商城市 L2 建造奖（0=关闭，默认待消融）：运河后期在近商城市
+     * （德比/伯明翰/科尔布鲁克代尔/斯托克）建 L2+ 板块的额外奖励——
+     * 这些城市离贸易商近，铁路时代从它们开始连接抢分（hint 4 后半推论）。 */
+    canalEndL2NearMerchantBonus: 0,
+    /** 德比 L2 建造奖（0=关闭，默认待消融）：德比周围路分稳定最高，
+     * 运河后期在德比建 L2+ 板块的额外奖励（hint 4 补充：德比稳定很高）。 */
+    canalEndL2DerbyBonus: 0,
+    /** 近商城市（非德比）按贸易商可收产业种类的每类奖励（0=关闭，默认待消融）：
+     * 伯明翰/科尔布鲁克代尔/斯托克的权重与附近贸易商能卖的种类挂钩——
+     * 卖的种类越多，这附近未来的建筑越多，权重相应提升（hint 4 补充）。 */
+    canalEndL2NearMerchantPerDiversity: 0,
   },
   network: {
     accessPerLocationCard: 0.6,
@@ -462,6 +491,15 @@ export function buildAgent(CFG: Cfg, meta: AgentPlugin['meta']): { decide: (args
 const ERA_ROUNDS = 8.0;
 
 const MERCHANT_IDS = Object.keys(MERCHANTS) as MerchantId[];
+
+/** 近商城市（hint 4：德比/伯明翰/科尔布鲁克代尔/斯托克——离贸易商近，
+ * 铁路时代从它们开始连接抢分，运河时代在上面留 L2 建筑的需求应调高）。 */
+const NEAR_MERCHANT_CITIES: ReadonlySet<string> = new Set([
+  'derby',
+  'birmingham',
+  'coalbrookdale',
+  'stoke-on-trent',
+]);
 
 function isMerchantNode(x: string): x is MerchantId {
   return Object.prototype.hasOwnProperty.call(MERCHANTS, x);
@@ -919,6 +957,33 @@ function ownUnflippedBreweryCount(state: GameState, pid: PlayerIndex): number {
   return n;
 }
 
+/** 手上是否有可造酒厂的牌（酒厂产业牌或百搭产业牌）。 */
+function hasBreweryCardInHand(state: GameState, pid: PlayerIndex): boolean {
+  return state.players[pid]!.hand.some(
+    (c) => (c.kind === 'industry' && c.industries.includes('brewery')) || c.kind === 'wild-industry',
+  );
+}
+
+/** 该城市附近（连通可达）贸易商可收的产业种类数（棉/制造/陶；'any' 按 3 种计）。 */
+function merchantDiversityFor(state: GameState, loc: LocationId): number {
+  const reach = reachableFrom(state, [loc]);
+  const kinds = new Set<IndustryType>();
+  for (const id of MERCHANT_IDS) {
+    if (!reach.has(id)) continue;
+    for (const t of state.merchants[id].tiles) {
+      if (t === 'blank') continue;
+      if (t === 'any') {
+        kinds.add('cotton');
+        kinds.add('manufacturer');
+        kinds.add('pottery');
+      } else {
+        kinds.add(t);
+      }
+    }
+  }
+  return kinds.size;
+}
+
 /** 场上己方某产业的板块数（已建出的流派"在场"证据）。 */
 function countOwnTilesOnBoard(state: GameState, pid: PlayerIndex, ind: IndustryType): number {
   let n = 0;
@@ -1170,12 +1235,16 @@ function resourceFlip(
 
   if (isCoal && !canSell) {
     const heatPrice = coalPrice(state);
+    const sale = simulateMarketSale(state, isCoal, cubes);
+    // 孤岛煤且市场吃不下全部方块 → 大概率砸手里（hint 1：非连通贸易商的小
+    // 连通块里煤无法翻面，给一个很大的惩罚——利克煤终局未翻的教训）。
+    const unflippableMult = sale.flips ? 1 : w.isolatedCoalUnflippableMult;
     if (isCanalPhase(ctx.phase)) {
       const heat = priceHeat(heatPrice, w.islandCoalCanalPriceBase, w.islandCoalCanalPriceSpan);
-      return Math.min(w.islandCoalCanalCap, w.islandCoalCanalBase + w.islandCoalCanalHeatBonus * heat);
+      return Math.min(w.islandCoalCanalCap, w.islandCoalCanalBase + w.islandCoalCanalHeatBonus * heat) * unflippableMult;
     }
     const heat = priceHeat(heatPrice, w.islandCoalRailPriceBase, w.islandCoalRailPriceSpan);
-    return Math.min(w.islandCoalRailCap, w.islandCoalRailBase + w.islandCoalRailHeatBonus * heat);
+    return Math.min(w.islandCoalRailCap, w.islandCoalRailBase + w.islandCoalRailHeatBonus * heat) * unflippableMult;
   }
 
   const sale = simulateMarketSale(state, isCoal, cubes);
@@ -1576,6 +1645,48 @@ function scoreBuildOp(state: GameState, ctx: EvalCtx, ind: IndustryType, loc: Lo
   // 运河后期 L1 建造惩罚：运河进度 <35% 时建 L1 板块，未翻在运河末被移除=纯亏。
   if (CFG.build.canalLateL1Penalty > 0 && tile.level === 1 && state.era === 'canal' && ctx.eraFrac < 0.35) {
     p.risk -= CFG.build.canalLateL1Penalty;
+  }
+  // 铁路中后期造煤惩罚：同期连接普遍 4-8 VP 而煤仅 2-4 VP，无脑造煤是负优化。
+  if (
+    CFG.build.railCoalLatePenalty > 0 &&
+    ind === 'coal' &&
+    state.era === 'rail' &&
+    ctx.eraFrac < CFG.build.railCoalLateGate
+  ) {
+    p.risk -= CFG.build.railCoalLatePenalty;
+  }
+  // 运河末首桶留存奖：运河收官时若还没有自己的未翻酒厂，建酒厂额外奖励
+  // （铁路开局双轨的啤酒弹药，运河末留 1 桶比多翻一个低级酒厂值钱）。
+  if (
+    CFG.build.canalEndBeerReserveBonus > 0 &&
+    ind === 'brewery' &&
+    isCanalPhase(ctx.phase) &&
+    isEraEndgame(ctx) &&
+    ownUnflippedBreweryCount(state, ctx.pid) === 0
+  ) {
+    p.strategic += CFG.build.canalEndBeerReserveBonus;
+  }
+  // 近商城市 L2 建造奖：运河后期在近商城市建 L2+ 板块，为铁路开局连接抢分。
+  // 德比按固定高奖（周围路分稳定最高）；伯明翰/科尔布鲁克代尔/斯托克按
+  // 附近贸易商可收产业种类加权（卖的种类越多,这附近未来建筑越多）。
+  if (tile.level >= 2 && isCanalPhase(ctx.phase) && NEAR_MERCHANT_CITIES.has(loc)) {
+    if (loc === 'derby' && CFG.build.canalEndL2DerbyBonus > 0) {
+      p.strategic += CFG.build.canalEndL2DerbyBonus;
+    } else if (CFG.build.canalEndL2NearMerchantPerDiversity > 0) {
+      p.strategic += merchantDiversityFor(state, loc) * CFG.build.canalEndL2NearMerchantPerDiversity;
+    }
+  }
+  // 可售板块自有酒门槛（hint 3）：铁路时代建可售板块，若自有酒桶不足以翻面
+  // 且手上没有酒厂牌可造桶，视为大概率砸手里——贸易商桶只有 1 个、
+  // 铁路时代不可能从其他玩家手里获得桶，自有酒桶是唯一可靠弹药。
+  if (
+    CFG.flip.railSellableNoOwnBeerPenalty > 0 &&
+    sellableInd &&
+    state.era === 'rail' &&
+    ownedBeerBarrels(state, ctx.pid) < tile.beerToFlip &&
+    !hasBreweryCardInHand(state, ctx.pid)
+  ) {
+    p.risk -= CFG.flip.railSellableNoOwnBeerPenalty;
   }
 
   // 改建对手煤/铁厂（引擎规则:全场该类方块为 0 时同产业更高级可覆盖）——

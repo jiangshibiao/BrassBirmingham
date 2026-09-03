@@ -22,6 +22,7 @@ export default createHeuristicPlugin({
   overrides: {
     lookahead: { fourActionWeight: 0.5 },
     leaf: { realFlipProb: 1, weight: 0.9 },
+    flip: { railSellableNoOwnBeerPenalty: 2.0 },
   },
   tuneEnvVar: 'BRASS_TUNE5',
 });
