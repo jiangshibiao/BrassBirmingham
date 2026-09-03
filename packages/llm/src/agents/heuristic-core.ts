@@ -251,6 +251,10 @@ const BASE_CFG = {
      * 几条路后，在此城造建筑的额外连通度分（hint 2 后半：更应倾向于在
      * 高连通城市建造——连通度分吃得多）。 */
     cityLinkBonus: 0,
+    /** 铁路时代高价值可售板块建造奖（0=关闭，默认待消融）：L3+ 棉/陶/制造
+     * 的额外奖励——真人回放显示人类靠高价值可售板块批量卖出（棉 L3/L4、
+     * 陶 L1，单次 10-21 VP）拉开分差，AI 则偏向可靠翻面的低价值煤铁。 */
+    railHighLevelSellableBonus: 0,
   },
   network: {
     accessPerLocationCard: 0.6,
@@ -1680,6 +1684,16 @@ function scoreBuildOp(state: GameState, ctx: EvalCtx, ind: IndustryType, loc: Lo
   // 的额外连通度分（更应倾向于在高连通城市建造）。
   if (CFG.build.cityLinkBonus > 0) {
     p.strategic += ownLinksToCity(state, ctx.pid, loc) * CFG.build.cityLinkBonus;
+  }
+  // 铁路时代高价值可售板块建造奖：L3+ 棉/陶/制造的额外奖励——人类靠这些
+  // 板块批量卖出拉开分差（棉 L3/L4、陶 L1，单次 10-21 VP）。
+  if (
+    CFG.build.railHighLevelSellableBonus > 0 &&
+    sellableInd &&
+    tile.level >= 3 &&
+    state.era === 'rail'
+  ) {
+    p.strategic += CFG.build.railHighLevelSellableBonus;
   }
   // 运河末首桶留存奖：运河收官时若还没有自己的未翻酒厂，建酒厂额外奖励
   // （铁路开局双轨的啤酒弹药，运河末留 1 桶比多翻一个低级酒厂值钱）。
