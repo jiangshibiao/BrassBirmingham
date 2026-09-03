@@ -143,6 +143,11 @@ const BASE_CFG = {
      * 若自有酒桶 < beerToFlip 且手上没有酒厂牌可造桶，视为大概率砸手里
      * （真人回放：AI 建 L5 制造厂仅 1 自有桶,翻面需 2,终局未翻=£16 纯亏）。 */
     railSellableNoOwnBeerPenalty: 0,
+    /** 酒厂牌豁免的最高 beerToFlip（默认 1）：beerToFlip ≤ 本值时手上有酒厂牌
+     * 即可豁免自有酒门槛（造 1 桶容易兑现）；beerToFlip ≥ 2 的板块
+     * （制造 L5/陶 L3/L5）不再豁免——必须自有酒桶 ≥2，防止"带张酒厂牌就敢
+     * 建 L5 却永远造不出第二桶"（0903 败局复盘：P0 带 1 桶+酒厂牌建 L5 未翻）。 */
+    railSellableNoOwnBeerCardExemptMaxLevel: 1,
     /** 孤岛煤无法翻面时的惩罚系数（1=不变，默认待消融）：非连通商人位的
      * 孤岛煤且市场吃不下全部方块时 flipProb 乘本值——利克煤终局未翻的教训
      * （hint 1：小连通块里煤无法翻面，给一个很大的惩罚）。 */
@@ -1728,12 +1733,14 @@ function scoreBuildOp(state: GameState, ctx: EvalCtx, ind: IndustryType, loc: Lo
   // 可售板块自有酒门槛（hint 3）：铁路时代建可售板块，若自有酒桶不足以翻面
   // 且手上没有酒厂牌可造桶，视为大概率砸手里——贸易商桶只有 1 个、
   // 铁路时代不可能从其他玩家手里获得桶，自有酒桶是唯一可靠弹药。
+  // 酒厂牌豁免仅限 beerToFlip=1（造 1 桶容易兑现）；≥2 桶必须自有酒桶 ≥2。
   if (
     CFG.flip.railSellableNoOwnBeerPenalty > 0 &&
     sellableInd &&
     state.era === 'rail' &&
     ownedBeerBarrels(state, ctx.pid) < tile.beerToFlip &&
-    !hasBreweryCardInHand(state, ctx.pid)
+    (tile.beerToFlip > CFG.flip.railSellableNoOwnBeerCardExemptMaxLevel ||
+      !hasBreweryCardInHand(state, ctx.pid))
   ) {
     p.risk -= CFG.flip.railSellableNoOwnBeerPenalty;
   }
