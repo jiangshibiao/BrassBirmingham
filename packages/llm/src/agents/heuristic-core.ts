@@ -276,6 +276,10 @@ const BASE_CFG = {
     /** 铁路 Link 每当前图标的确定性溢价（时代末必得分,对抗建筑翻面不确定性）。
      * C6 ×500 终验有效项：0.7（hint 2：铁路低值建筑不如修高分路）。 */
     railCertaintyBonus: 0.7,
+    /** 对手翻面分享惩罚（0=关闭，默认待消融）：我铺的连接让对手在该城的
+     * 未翻板块得以卖出翻面时，按对手未翻 VP 面值 × 本值从我的 Link 分中
+     * 扣减——基础设施白送对手翻面是隐性亏损（对手建模第一项）。 */
+    opponentFlipSharePenalty: 0,
   },
   develop: {
     railEraTile: 0.35,
@@ -341,6 +345,10 @@ const BASE_CFG = {
      * 给出售行动加战略分——动作才是瓶颈、翻面才是兑现（审计：全场每局
      * ~17 VP 面值造了卖不掉，主因是卖动在行动竞争中输给建动）。 */
     inventoryUrgency: 0,
+    /** 用掉商人最后一桶的狙击奖（0=关闭，默认待消融）：卖出时若用掉某商人
+     * 最后一桶且对手有该商人可收的未翻板块，按对手未翻 VP 面值 × 本值
+     * 奖励——让对手 12-20 VP 的卖出流产（对手建模第二项，高手常规武器）。 */
+    denyLastBarrelBonus: 0,
   },
   loan: {
     amount: 30,
@@ -1018,6 +1026,29 @@ function ownUnflippedSellableVp(state: GameState, pid: PlayerIndex): number {
   for (const slots of Object.values(state.board.slots)) {
     for (const t of slots) {
       if (t && t.player === pid && !t.flipped && t.tile.sellable) n += t.tile.vp;
+    }
+  }
+  return n;
+}
+
+/** 某城市对手（非 pid）未翻面板块的 VP 面值总和（基础设施白送对手翻面的隐性亏损口径）。 */
+function opponentsUnflippedVpAt(state: GameState, pid: PlayerIndex, loc: NetworkNode): number {
+  if (isMerchantNode(loc)) return 0;
+  let n = 0;
+  for (const t of state.board.slots[loc] ?? []) {
+    if (t && t.player !== pid && !t.flipped) n += t.tile.vp;
+  }
+  return n;
+}
+
+/** 对手（非 pid）未翻可售板块中某商人可收的 VP 面值总和（狙击该商人最后一桶的价值口径）。 */
+function opponentsUnflippedSellableVpFor(state: GameState, pid: PlayerIndex, merchant: MerchantId): number {
+  let n = 0;
+  for (const slots of Object.values(state.board.slots)) {
+    for (const t of slots) {
+      if (t && t.player !== pid && !t.flipped && t.tile.sellable && merchantAccepts(state, merchant, t.tile.industry)) {
+        n += t.tile.vp;
+      }
     }
   }
   return n;
@@ -1826,6 +1857,13 @@ function scoreNetworkLink(state: GameState, ctx: EvalCtx, linkIndex: number, cos
   // Link 确定性溢价（hint:铁路低值建筑不如修高分路——Link VP 时代末必得,
   // 不像建筑要看翻面概率脸色;仅铁路时代,运河网反正要拆）。
   if (!isCanalPhase(ctx.phase)) vp += current * CFG.network.railCertaintyBonus;
+  // 对手翻面分享惩罚：我铺的连接让对手在该城的未翻板块得以卖出翻面时，
+  // 按对手未翻 VP 面值 × 系数从我的 Link 分中扣减——基础设施白送对手
+  // 翻面是隐性亏损（对手建模第一项）。
+  if (w.opponentFlipSharePenalty > 0) {
+    vp -= opponentsUnflippedVpAt(state, ctx.pid, a) * w.opponentFlipSharePenalty;
+    vp -= opponentsUnflippedVpAt(state, ctx.pid, b) * w.opponentFlipSharePenalty;
+  }
 
   // 探索先验：本时代头几条进空白区域的连接是溢价。
   const linksBuilt = state.board.links.filter((x) => x.player === ctx.pid).length;
@@ -2069,6 +2107,16 @@ function scoreSellOp(state: GameState, ctx: EvalCtx, action: Extract<Action, { t
     p.vp += placed.tile.vp * eraScoreMult(state, placed.tile);
     p.income += placed.tile.incomeAdvance;
     if (sale.useMerchantBeer) addParts(p, merchantBonusParts(state, sale.merchant));
+    // 用掉商人最后一桶的狙击奖：让对手该商人可收的未翻板块卖出流产
+    // （对手建模：高手常规武器——抢先用掉商人最后一桶可让对手 12-20 VP 的
+    // 卖出流产）。
+    if (sale.useMerchantBeer && w.denyLastBarrelBonus > 0) {
+      const m = state.merchants[sale.merchant];
+      const barrelsLeft = m.barrels.filter((b, i) => b && m.tiles[i] !== 'blank').length;
+      if (barrelsLeft === 1) {
+        p.strategic += opponentsUnflippedSellableVpFor(state, ctx.pid, sale.merchant) * w.denyLastBarrelBonus;
+      }
+    }
   }
 
   // 翻面推进收入 = 持续性现金流，显式加计。
